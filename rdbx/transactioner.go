@@ -12,7 +12,7 @@ type tx struct {
 	DBTX
 }
 
-func NewTransactioner(db DBTX) UniversalTransactioner {
+func NewTransactioner(db DBTX) *tx {
 	return &tx{
 		db,
 	}

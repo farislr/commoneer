@@ -15,7 +15,7 @@ type mock struct {
 	sqlmock.Sqlmock
 }
 
-func New(sqlmock sqlmock.Sqlmock) DBTXMock {
+func New(sqlmock sqlmock.Sqlmock) *mock {
 	return &mock{
 		sqlmock,
 	}
