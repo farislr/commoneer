@@ -47,7 +47,7 @@ func queryx() {
 		CreatedAt sql.NullTime
 	}
 
-	if err := db.Queryx(context.Background(), "SELECT * FROM model_table", &model); err != nil {
+	if err := db.Queryx(context.Background(), "SELECT * FROM model_table", model); err != nil {
 		log.Println(err)
 	}
 
