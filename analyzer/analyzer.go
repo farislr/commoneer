@@ -26,7 +26,19 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	inspector.Preorder(nodeFilter, func(node ast.Node) {
 		funcDecl := node.(*ast.FuncDecl)
 
-		fmt.Printf("funcDecl: %v\n", funcDecl)
+		body := funcDecl.Body.List
+
+		// fmt.Printf("funcDecl: %v\n", funcDecl)
+		for _, b := range body {
+			ifStmt, ok := b.(*ast.IfStmt)
+			if !ok {
+				continue
+			}
+
+			fmt.Printf("ifStmt: %v\n", ifStmt)
+
+		}
+
 	})
 
 	return nil, nil
