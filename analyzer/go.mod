@@ -1,12 +1,12 @@
 module github.com/farislr/commoneer/analyzer
 
-go 1.17
+go 1.18
 
 require (
 	github.com/farislr/commoneer v0.0.0-00010101000000-000000000000
 	github.com/go-redis/redis/v8 v8.11.4
 	github.com/go-redsync/redsync/v4 v4.5.0
-	golang.org/x/tools v0.1.9
+	golang.org/x/tools v0.0.0-20201224043029-2b0845dc783e
 )
 
 require (
@@ -16,9 +16,9 @@ require (
 	github.com/hashicorp/errwrap v1.0.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.0 // indirect
 	github.com/shopspring/decimal v1.3.1 // indirect
-	golang.org/x/mod v0.5.1 // indirect
-	golang.org/x/sys v0.0.0-20211019181941-9d821ace8654 // indirect
+	golang.org/x/mod v0.3.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
+	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
 )
 
 replace github.com/farislr/commoneer => ../

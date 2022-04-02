@@ -1,0 +1,152 @@
+# golangci configuration
+run:
+  # skip test files and protobuf generated code
+  skip-files:
+    - ".*_test\\.go$"
+    - ".*\\.pb\\.go$"
+    - ".*\\.pb\\.gw\\.go$"
+
+# output configuration options
+output:
+  # colored-line-number|line-number|json|tab|checkstyle|code-climate, default is "colored-line-number"
+  format: colored-line-number
+
+# all available settings of specific linters
+linters-settings:
+  errcheck:
+    # report about not checking of errors in type assertions: `a := b.(MyStruct)`;
+    # default is false: such cases aren't reported by default.
+    check-type-assertions: true
+
+    # report about assignment of errors to blank identifier: `num, _ := strconv.Atoi(numStr)`;
+    # default is false: such cases aren't reported by default.
+    check-blank: true
+
+  exhaustive:
+    # indicates that switch statements are to be considered exhaustive if a
+    # 'default' case is present, even if all enum members aren't listed in the
+    # switch
+    default-signifies-exhaustive: true
+
+  gocognit:
+    # minimal code complexity to report, 30 by default (but we recommend 10-20)
+    min-complexity: 30
+
+  gocyclo:
+    # minimal code complexity to report, 30 by default (but we recommend 10-20)
+    min-complexity: 30
+
+  cyclop:
+    # minimal code complexity to report, 30 by default (but we recommend 10-20)
+    max-complexity: 30
+  
+  gomoddirectives:
+    # Allow local `replace` directives. Default is false.
+    replace-local: true
+    # List of allowed `replace` directives. Default is empty.
+    # replace-allow-list:
+    #   - launchpad.net/gocheck
+    # Allow to not explain why the version has been retracted in the `retract` directives. Default is false.
+    retract-allow-no-explanation: false
+    # Forbid the use of the `exclude` directives. Default is false.
+    exclude-forbidden: false
+  
+  custom:
+    rdbx:
+     path: rdbx_queryx.so
+     description: RDBX linter
+     original-url: github.com/farislr/commoneer/analyzer
+
+linters:
+  # please, do not use `enable-all`: it's deprecated and will be removed soon.
+  # inverted configuration with `enable-all` and `disable` is not scalable during updates of golangci-lint
+  disable-all: true
+  enable:
+    # level 0
+    # - bodyclose
+    # - deadcode
+    - govet
+    - errcheck
+    - revive
+    # - errorlint
+    # - exhaustive
+    # - exportloopref
+    # - gosec
+    # - nilerr
+    # - rowserrcheck
+    # - sqlclosecheck
+    # - staticcheck
+    # - typecheck
+    # level 1
+    # - cyclop
+    # - durationcheck
+    # - forcetypeassert
+    # - gocognit
+    # - gocyclo
+    # - ineffassign
+    # - makezero
+    # - prealloc
+    # - structcheck
+    # - unconvert
+    # - unparam
+    # - unused
+    # - varcheck
+    # - wastedassign
+    # level 2
+    # - dogsled
+    # - dupl
+    # - forbidigo
+    # - gosimple
+    # - gochecknoinits
+    # - goconst
+    # - gocritic
+    # - godox
+    # - ifshort
+    # level 3
+    # - gofmt
+    # - goimports
+    # - gomoddirectives
+    # - importas
+    # - nakedret
+    # - nolintlint
+    # - paralleltest
+    # - thelper
+    # - tparallel
+
+  # disable:
+    #- asciicheck
+    #- depguard
+    #- exhaustivestruct
+    #- gofumpt
+    #- goheader
+    #- gochecknoglobals
+    #- gomnd
+    #- gomodguard
+    #- godot
+    #- goprintffuncname
+    #- funlen
+    #- interfacer
+    #- maligned
+    #- misspell
+    #- nestif
+    #- goerr113
+    #- nlreturn
+    #- noctx
+    #- predeclared
+    #- scopelint
+    #- testpackage
+    #- whitespace
+    #- wsl
+    #- wrapcheck
+    #- lll
+    #- gci
+    #- stylecheck
+    # - govet
+
+issues:
+  # Excluding configuration per-path, per-linter, per-text and per-source
+  exclude-rules:
+    # https://github.com/go-critic/go-critic/issues/926
+    - linters:
+        - gocritic
+      text: "unnecessaryDefer:"
