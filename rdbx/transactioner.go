@@ -2,87 +2,90 @@ package rdbx
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"log"
-	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/go-redsync/redsync/v4"
+	"github.com/go-redsync/redsync/v4/redis/goredis/v8"
 )
 
 type tx struct {
-	DBTX
+	dbtx        DBTX
+	rsync       *redsync.Redsync
+	redisClient redis.UniversalClient
 }
 
-func NewTransactioner(db DBTX) *tx {
+func NewTransactioner(dbtx DBTX, redisCLient redis.UniversalClient) *tx {
+	pool := goredis.NewPool(redisCLient)
+	rsync := redsync.New(pool)
+
 	return &tx{
-		db,
+		dbtx:        dbtx,
+		rsync:       rsync,
+		redisClient: redisCLient,
 	}
 }
 
-func (dbx *dbx) TxEnd(ctx context.Context, txFunc interface{}, mutex *redsync.Mutex) error {
-	var err error
-	tx, err := dbx.Begin()
-	if err != nil {
-		return err
-	}
+func (t *tx) EnableTx(ctx context.Context) *enabledTx {
+	tx, err := t.dbtx.Begin()
 
 	ctx = context.WithValue(ctx, &contextKeyEnableSqlTx{}, tx)
 
-	defer func() {
-		p := recover()
+	return &enabledTx{
+		ctx:         ctx,
+		rsync:       t.rsync,
+		redisClient: t.redisClient,
 
-		switch {
-		case p != nil:
-
-			if err = tx.Rollback(); err != nil {
-				panic(err)
-			}
-
-		case err != nil:
-			if err = tx.Rollback(); err != nil {
-				log.Println(err)
-			}
-
-			dbx.unlock(ctx, mutex)
-		default:
-			err = tx.Commit()
-			if err != nil {
-				log.Println(err)
-			}
-		}
-	}()
-
-	switch fun := txFunc.(type) {
-	case TxFn:
-		err = fun(ctx, mutex)
-	case TxFnNoMutex:
-		err = fun(ctx)
+		err: err,
 	}
-
-	return err
 }
 
-func (dbx *dbx) EnableTx(ctx context.Context, txFunc TxFnNoMutex) error {
-	return dbx.TxEnd(ctx, txFunc, nil)
+type enabledTx struct {
+	ctx         context.Context
+	rsync       *redsync.Redsync
+	m           *redsync.Mutex
+	redisClient redis.UniversalClient
+
+	key string
+	err error
+
+	autoUnlock bool
 }
 
-func (dbx *dbx) EnableTxWithRedisLock(ctx context.Context, key, value string, duration time.Duration, retVal interface{}, txFunc TxFn) error {
-	mutex := dbx.NewMutex(key, redsync.WithExpiry(duration), redsync.WithTries(1), redsync.WithGenValueFunc(func() (string, error) { return value, nil }))
-
-	if err := mutex.LockContext(ctx); err != nil {
-		if err := dbx.Get(ctx, key).Scan(retVal); err != nil {
-			return err
-		}
-
-		return err
+func (t enabledTx) Exec(actionFn func(ctx context.Context) error) error {
+	if t.err != nil {
+		return t.err
 	}
 
-	return dbx.TxEnd(ctx, txFunc, mutex)
-}
-
-func (dbx *dbx) unlock(ctx context.Context, mutex *redsync.Mutex) {
-	if mutex != nil {
-		if ok, err := mutex.UnlockContext(ctx); !ok || err != nil {
-			log.Println(err)
-		}
+	tx, ok := t.ctx.Value(&contextKeyEnableSqlTx{}).(*sql.Tx)
+	if !ok {
+		return errors.New("no tx found")
 	}
+
+	defer func(t *enabledTx) {
+		r := recover()
+		if tx != nil {
+			switch {
+			case r != nil:
+				if t.err = tx.Rollback(); t.err != nil {
+					log.Panicf("[Transactioner Error Rollback] %v", t.err)
+				}
+			case t.err != nil:
+				if t.err = tx.Rollback(); t.err != nil {
+					log.Printf("[Transactioner Error Rollback] %v", t.err)
+				}
+			default:
+				if t.err = tx.Commit(); t.err != nil {
+					log.Printf("[Transactioner Error Commit] %v", t.err)
+				}
+			}
+		}
+
+	}(&t)
+
+	t.err = actionFn(t.ctx)
+
+	return t.err
 }

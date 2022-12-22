@@ -10,6 +10,14 @@ func ModifyOrKeepField(existingQuery string, model interface{}) (query string) {
 		return existingQuery
 	}
 
+	fields := GetColumns(model)
+
+	query = strings.ReplaceAll(existingQuery, "*", strings.Join(fields, ", "))
+
+	return query
+}
+
+func GetColumns(model interface{}) []string {
 	value := reflect.Indirect(reflect.ValueOf(model))
 
 	if value.Kind() == reflect.Slice {
@@ -24,7 +32,5 @@ func ModifyOrKeepField(existingQuery string, model interface{}) (query string) {
 		}
 	}
 
-	query = strings.ReplaceAll(existingQuery, "*", strings.Join(fields, ", "))
-
-	return query
+	return fields
 }

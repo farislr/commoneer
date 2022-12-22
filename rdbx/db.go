@@ -1,34 +1,25 @@
 package rdbx
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
+	"log"
 	"reflect"
 
 	"github.com/farislr/commoneer/rdbx/internal"
-	"github.com/go-redis/redis/v8"
-	"github.com/go-redsync/redsync/v4"
-	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
 )
 
-type dbx struct {
-	DB *sql.DB
+type contextKeyEnableSqlTx struct{}
 
-	redis.Cmdable
-	*redsync.Redsync
-}
-
-func NewDBx(conn *sql.DB, r redis.Cmdable, rsync *redsync.Redsync) DBTX {
-	return &dbx{
-		conn,
-		r,
-		rsync,
-	}
-}
-
-func (db *dbx) Queryx(ctx context.Context, query string, model interface{}, args ...interface{}) error {
+func (db *dbx) Queryx(
+	ctx context.Context,
+	query string,
+	model interface{},
+	args ...interface{},
+) error {
 	p := reflect.Indirect(reflect.ValueOf(model))
 
 	t := p.Type()
@@ -46,7 +37,7 @@ func (db *dbx) Queryx(ctx context.Context, query string, model interface{}, args
 	}
 	defer rows.Close()
 
-	err = db.rowScan(ctx, rows, p, t)
+	err = db.rowScan(rows, p, t)
 	if err != nil {
 		return err
 	}
@@ -54,7 +45,7 @@ func (db *dbx) Queryx(ctx context.Context, query string, model interface{}, args
 	return nil
 }
 
-func (db *dbx) rowScan(ctx context.Context, rows *sql.Rows, rVal reflect.Value, rType reflect.Type) error {
+func (db *dbx) rowScan(rows *Rows, rVal reflect.Value, rType reflect.Type) error {
 	el := rVal
 
 	if rVal.Kind() == reflect.Slice {
@@ -76,27 +67,12 @@ func (db *dbx) rowScan(ctx context.Context, rows *sql.Rows, rVal reflect.Value, 
 			vPtrs[i] = &vs[i]
 		}
 
-		err := rows.Scan(vPtrs...)
-		if err != nil {
+		if err := rows.Scan(vPtrs...); err != nil {
 			return err
 		}
 
-		for i := 0; i < rType.NumField(); i++ {
-			if c, ok := rType.Field(i).Tag.Lookup("column"); ok {
-				for ii, col := range columns {
-					if col == c {
-						colVal := vs[ii]
-
-						if b, ok := colVal.([]byte); ok {
-							colVal = string(b)
-						}
-
-						if err = db.structFieldSet(el.Field(i), colVal); err != nil {
-							return err
-						}
-					}
-				}
-			}
+		if err := db.assignField(rType, el, columns, vs); err != nil {
+			return err
 		}
 
 		if rVal.Kind() == reflect.Slice {
@@ -107,45 +83,28 @@ func (db *dbx) rowScan(ctx context.Context, rows *sql.Rows, rVal reflect.Value, 
 	return nil
 }
 
-func (db *dbx) structFieldSet(element reflect.Value, value interface{}) error {
-	if element.IsValid() {
-		if element.CanSet() {
-			switch v := element.Interface().(type) {
-			case Assignabler:
-				a, err := v.Assign(value)
-				if err != nil {
-					return err
+func (db *dbx) assignField(
+	rType reflect.Type,
+	rValue reflect.Value,
+	columns []string,
+	values []interface{},
+) error {
+	for i := 0; i < rType.NumField(); i++ {
+		if c, ok := rType.Field(i).Tag.Lookup("column"); ok {
+			for ii, col := range columns {
+				if col == c {
+					colVal := values[ii]
+
+					if b, ok := colVal.([]byte); ok {
+						colVal = string(b)
+					}
+
+					if ok := db.checkStructFieldSetable(rValue); ok {
+						if err := db.checkStructFieldType(rValue.Field(i), colVal); err != nil {
+							return err
+						}
+					}
 				}
-				element.Set(reflect.ValueOf(a))
-			case sql.NullTime:
-				if err := v.Scan(value); err != nil {
-					return err
-				}
-				element.Set(reflect.ValueOf(v))
-			case sql.NullString:
-				if err := v.Scan(value); err != nil {
-					return err
-				}
-				element.Set(reflect.ValueOf(v))
-			case sql.NullInt64:
-				if err := v.Scan(value); err != nil {
-					return err
-				}
-				element.Set(reflect.ValueOf(v))
-			case uuid.UUID:
-				id, err := uuid.Parse(value.(string))
-				if err != nil {
-					return err
-				}
-				element.Set(reflect.ValueOf(id))
-			case decimal.Decimal:
-				v, err := decimal.NewFromString(value.(string))
-				if err != nil {
-					return err
-				}
-				element.Set(reflect.ValueOf(v))
-			default:
-				element.Set(reflect.ValueOf(value))
 			}
 		}
 	}
@@ -153,62 +112,117 @@ func (db *dbx) structFieldSet(element reflect.Value, value interface{}) error {
 	return nil
 }
 
-func (dbx *dbx) Exec(query string, args ...interface{}) (sql.Result, error) {
-	return dbx.DB.Exec(query, args...)
+func (db *dbx) checkStructFieldType(element reflect.Value, value interface{}) error {
+	switch t := element.Addr().Interface().(type) {
+	case sql.Scanner:
+		if err := db.sqlScannerSet(element, t, value); err != nil {
+			return err
+		}
+	default:
+		element.Set(reflect.ValueOf(value).Convert(element.Type()))
+	}
+
+	return nil
 }
 
-func (dbx *dbx) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
-	tx, ok := ctx.Value(&contextKeyEnableSqlTx{}).(*sql.Tx)
-	if ok {
+func (dbx *dbx) sqlScannerSet(element reflect.Value, t sql.Scanner, value interface{}) error {
+	if err := t.Scan(value); err != nil {
+		return err
+	}
+
+	element.Set(reflect.ValueOf(t).Elem())
+
+	return nil
+}
+
+func (dbx *dbx) checkStructFieldSetable(element reflect.Value) bool {
+	if element.IsValid() && element.CanSet() && element.CanAddr() {
+		return true
+	}
+
+	return false
+}
+
+type dbx struct {
+	db *sql.DB
+
+	cache Cache
+}
+
+func (x *dbx) Begin() (*sql.Tx, error) {
+	return x.db.Begin()
+}
+
+func (x *dbx) Close() error {
+	return x.db.Close()
+}
+
+func (x *dbx) ExecContext(
+	ctx context.Context,
+	query string,
+	args ...interface{},
+) (sql.Result, error) {
+	if tx, ok := ctx.Value(&contextKeyEnableSqlTx{}).(*sql.Tx); ok {
 		return tx.ExecContext(ctx, query, args...)
 	}
 
-	return dbx.DB.ExecContext(ctx, query, args...)
+	return x.db.ExecContext(ctx, query, args...)
 }
 
-func (dbx *dbx) Prepare(query string) (*sql.Stmt, error) {
-	return dbx.DB.Prepare(query)
-}
-
-func (dbx *dbx) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
-	tx, ok := ctx.Value(&contextKeyEnableSqlTx{}).(*sql.Tx)
-	if ok {
+func (x *dbx) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	if tx, ok := ctx.Value(&contextKeyEnableSqlTx{}).(*sql.Tx); ok {
 		return tx.PrepareContext(ctx, query)
 	}
 
-	return dbx.DB.PrepareContext(ctx, query)
+	return x.db.PrepareContext(ctx, query)
 }
 
-func (dbx *dbx) Query(query string, args ...interface{}) (*sql.Rows, error) {
-	return dbx.DB.Query(query, args...)
-}
+func (x *dbx) QueryContext(ctx context.Context, query string, args ...interface{}) (*Rows, error) {
+	queryKey := hex.EncodeToString([]byte(query))
 
-func (dbx *dbx) QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
-	tx, ok := ctx.Value(&contextKeyEnableSqlTx{}).(*sql.Tx)
-	if ok {
-		return tx.QueryContext(ctx, query, args...)
+	var rows *sql.Rows
+	var err error
+
+	res, err := x.cache.Get(ctx, string(queryKey))
+	if err != nil {
+		log.Printf("cache get error: %v", err)
 	}
 
-	return dbx.DB.QueryContext(ctx, query, args...)
+	if tx, ok := ctx.Value(&contextKeyEnableSqlTx{}).(*sql.Tx); ok {
+		rows, err = tx.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, err
+		}
+
+		goto ReturnRows
+	}
+
+	rows, err = x.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+
+ReturnRows:
+	return &Rows{
+		ctx:        ctx,
+		Rows:       rows,
+		cachedRows: bytes.NewBuffer(res),
+		cache:      x.cache,
+		queryKey:   queryKey,
+	}, nil
 }
 
-func (dbx *dbx) QueryRow(query string, args ...interface{}) *sql.Row {
-	return dbx.DB.QueryRow(query, args...)
-}
-
-func (dbx *dbx) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
-	tx, ok := ctx.Value(&contextKeyEnableSqlTx{}).(*sql.Tx)
-	if ok {
+func (x *dbx) QueryRowContext(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	if tx, ok := ctx.Value(&contextKeyEnableSqlTx{}).(*sql.Tx); ok {
 		return tx.QueryRowContext(ctx, query, args...)
 	}
 
-	return dbx.DB.QueryRowContext(ctx, query, args...)
+	return x.db.QueryRowContext(ctx, query, args...)
 }
 
-func (dbx *dbx) Begin() (*sql.Tx, error) {
-	return dbx.DB.Begin()
-}
-
-func (dbx *dbx) Close() error {
-	return dbx.DB.Close()
+func NewDbx(db *sql.DB, cache Cache) *dbx {
+	return &dbx{
+		db:    db,
+		cache: cache,
+	}
 }
